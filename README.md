@@ -1,11 +1,15 @@
 ## 资料:
 
-| 安全库Secureum: | `https://secureum.substack.com/`                             |
-| --------------- | ------------------------------------------------------------ |
-| 入门教程:       | `https://console-cowboys.blogspot.com/2020/08/smart-contract-hacking-chapter-1.html` |
-| 读private变量   | `https://learnblockchain.cn/article/4199`                    |
-| Ethernaut CTF   | `https://ethernaut.openzeppelin.com/`                        |
-| Ethernaut答案   | `https://xz.aliyun.com/t/7173`<br />`https://xz.aliyun.com/t/7174` |
+| 安全库Secureum:                         | `https://secureum.substack.com/`                             |
+| --------------------------------------- | ------------------------------------------------------------ |
+| 入门教程:                               | `https://console-cowboys.blogspot.com/2020/08/smart-contract-hacking-chapter-1.html` |
+| 读private变量                           | `https://learnblockchain.cn/article/4199`                    |
+| Ethernaut CTF                           | `https://ethernaut.openzeppelin.com/`                        |
+| Ethernaut答案                           | `https://xz.aliyun.com/t/7173`<br />`https://xz.aliyun.com/t/7174` |
+| Ethernaut 题库闯关 #13 — Gatekeeper One | `https://learnblockchain.cn/article/4656`                    |
+| 合约安全之-变量隐藏安全问题分析         | `https://learnblockchain.cn/article/4204`                    |
+|                                         |                                                              |
+|                                         |                                                              |
 
 
 
@@ -26,6 +30,185 @@
 |                        |                                                            |                                                              |
 
 ### 知识点:
+
+#### 影子变量:
+
+Base合约和Children合约都具有owner状态变量，却只有Base合约有onlyOwner修饰符。
+
+- **对Base合约：**没有对owner进行赋值(owner默认为0x0000000000000000000000000000000000000000)，却直接定义了onlyOwner的修饰符。
+- **对Children合约：**对owner进行赋值(owner默认为0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266)，却没有直接定义onlyOwner的修饰符(直接继承使用了Base合约的onlyOwner的修饰符)。
+
+```
+//SPDX-License-Identifier: Unlicense
+pragma solidity ^0.4.0;
+
+import "hardhat/console.sol";
+
+contract Base {
+    address public owner;
+    modifier onlyOwner() {
+        require(msg.sender==owner,"Only Owner can call the function");
+        _;
+    }
+}
+contract Children is Base {
+    uint public totalSupply = 100;
+    address public owner;
+
+    constructor() public {
+        owner = msg.sender;
+        console.log("\\nChildren constructor:%s",owner);
+
+    }
+
+    function withdraw(uint _amount) public onlyOwner   {
+        totalSupply = totalSupply - _amount;
+        // console.log(“aaa”);
+    }
+}
+```
+
+解决方法:
+
+理解了上面的原因，很简单的两种修改方法：
+
+1. 给Base合约加上owner的赋值。
+
+   ```solidity
+   constructor() public {
+           owner = msg.sender;
+           console.log("\\nBase constructor:%s",owner);
+       }
+   ```
+
+2. 给Children合约加上OnlyOwner修饰符。
+
+   ```solidity
+   modifier onlyOwner() {
+           require(msg.sender==owner,"Only Owner can call the function");
+           _;
+       }
+   ```
+
+#### 变量覆盖:
+
+```
+pragma solidity ^0.8.0;
+
+contract VariableOverride {
+    uint256 public globalVariable = 1;
+
+    function setGlobalVariable(uint256 _globalVariable) public {
+        uint256 globalVariable = _globalVariable;
+        //使用uint256声明了与全局变量同名
+        //去掉uint后 globalVariable = _globalVariable;
+        // 在这里，使用 globalVariable 变量时，会优先使用局部变量，而不是全局变量。
+        // 这将会覆盖全局变量的值，导致数据丢失。
+    }
+}
+
+```
+
+下面合约中，下面的三行diam重新定义了结构体，因此会覆盖第一个、第二个存储块，因为我们只需要见_name设置为bytes32(1)就可以将unlocked变为“ture”
+
+0.8.0版本以下才有这个问题:
+
+```
+pragma solidity ^0.4.23; 
+
+// A Locked Name Registrar
+contract Locked {
+
+    bool public unlocked = false;  // registrar locked, no name updates
+
+    struct NameRecord { // map hashes to addresses
+        bytes32 name; // 
+        address mappedAddress;
+    }
+
+    mapping(address => NameRecord) public registeredNameRecord; // records who registered names 
+    mapping(bytes32 => address) public resolve; // resolves hashes to addresses
+
+    function register(bytes32 _name, address _mappedAddress) public {
+        // set up the new NameRecord
+        NameRecord newRecord;
+        newRecord.name = _name;
+        newRecord.mappedAddress = _mappedAddress; 
+		
+        resolve[_name] = _mappedAddress;
+        registeredNameRecord[msg.sender] = newRecord; 
+
+        require(unlocked); // only allow registrations if contract is unlocked
+    }
+}
+
+contract attack{
+    function hack(address param){
+        Locked a = locked(param);
+        a.register(bytes32(1),address(msg.sender));
+    }
+}
+```
+
+解决方法:
+
+```
+   NameRecord memory newRecord = NameRecord({
+        name: _name,
+        mappedAddress: _mappedAddress
+    });
+```
+
+
+
+#### 运算符:
+
+| mul  | *    |
+| ---- | ---- |
+| div  | /    |
+| add  | +    |
+| sub  | -    |
+
+
+
+#### 剩余gas:
+
+```
+0.8.0< msg.gas
+0.8.0> gasleft()
+```
+
+
+
+#### 合约构造函数中代码段长度为0:
+
+```
+ assembly { x := extcodesize(caller) }
+```
+
+#### 掩码（Mask）:
+
+```
+bytes4 a = 0xffffffff;
+bytes4 mask = 0xf0f0f0f0;
+bytes4 result = a & mask ;   // 0xf0f0f0f0
+```
+
+#### (XOR) 异或运算: 
+
+```
+1010
+XOR  1101
+    ------
+     0111
+异或的特性就是异或两次就是原数据
+```
+
+
+
+#### 类型转换:
+
+1字节=2位16进制=8位2进制
 
 #### call send transfer:
 
